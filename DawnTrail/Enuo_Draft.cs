@@ -13,7 +13,7 @@ using KodakkuAssist.Extensions;
 namespace MmwEnuoDraftNamespace;
 
 [ScriptType(
-    name: "恩欧歼殛战 MMW攻略草稿",
+    name: "恩欧歼殛战草稿",
     territorys: [1362],
     guid: "aa58398a-5048-4ca8-9b87-e5233e9a4e63",
     version: "0.0.1.0",
