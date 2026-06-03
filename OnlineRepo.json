@@ -7,8 +7,16 @@
     "Repo": "https://github.com/Suzuukii/KodakkuAssistScript",
     "DownloadUrl": "https://raw.githubusercontent.com/Suzuukii/KodakkuAssistScript/main/DawnTrail/Enuo_Draft.cs",
     "UpdateInfo": "初版公开：P1/P2部分机制、P3部分状态建模。",
-    "TerritoryIds": [
-      1362
-    ]
+    "TerritoryIds":[1362],
+  },
+  {
+    "Name":"绝妖星",
+    "Guid":"42683c02-0c71-4fd6-b49a-19163b24b22c",
+    "Version":"0.0.0.18",
+    "Author":"Suzuukii",
+    "Repo": "https://github.com/Suzuukii/KodakkuAssistScript",
+    "DownloadUrl":"https://raw.githubusercontent.com/Suzuukii/KodakkuAssistScript/main/DawnTrail/DMU.cs",
+    "UpdateInfo":"初测试",
+    "TerritoryIds":[1363],
   }
 ]
