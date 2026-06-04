@@ -1,11 +1,9 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.Numerics;
 using System.Linq;
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 using KodakkuAssist.Module.GameEvent;
 using KodakkuAssist.Module.Draw;
@@ -13,12 +11,8 @@ using KodakkuAssist.Module.Draw.Manager;
 using KodakkuAssist.Module.GameOperate;
 using KodakkuAssist.Script;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Dalamud.Utility.Numerics;
-using FFXIVClientStructs.FFXIV.Client.Game.UI;
-using FFXIVClientStructs.STD.Helper;
 using KodakkuAssist.Data;
-using Lumina.Data.Parsing;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 
@@ -28,7 +22,7 @@ namespace SuzuukiiKodakkuAssist
     [ScriptType(name:"妖星乱舞绝境战",
         territorys:[1363],
         guid:"42683c02-0c71-4fd6-b49a-19163b24b22c",
-        version:"0.0.0.20",
+        version:"0.0.0.22",
         note:scriptNotes,
         author:"Suzuukii")]
 
@@ -38,7 +32,8 @@ namespace SuzuukiiKodakkuAssist
         public const string scriptNotes=
             """
             妖星乱舞绝境战的脚本。
-            
+            等主流打法稳定后，会将成熟指路方法融入主脚本。
+
             支持进行小队排序测试,可以在聊天框中输入/e kuwutest来检查小队排序是否正确。
             输入/e kuwuclear清除小队排序测试产生的目标标记。
 
@@ -71,12 +66,6 @@ namespace SuzuukiiKodakkuAssist
         public double chainTrapMaxDrawDurationSeconds { get; set; } = 5;
         [UserSetting("Beta P1 冰雷技能特效屏蔽 (默认关闭, 使用unsafe写入)")]
         public bool enableBetaPhase1HideIceThunderEffects { get; set; } = false;
-        [UserSetting("Beta P1 众神之像3 传送放点指路 (打法绑定, 默认关闭)")]
-        public bool enableBetaPhase1GravenImage3TeleportGuide { get; set; } = false;
-        [UserSetting("Beta P1 众神之像1 玄乎乎魔法个人指路 (打法绑定, 默认关闭)")]
-        public bool enableBetaPhase1GravenImage1ObfuscationGuide { get; set; } = false;
-        [UserSetting("Beta P1 众神之像1 连环环陷阱击退指示 (默认关闭)")]
-        public bool enableBetaPhase1ChainTrapKnockbackGuide { get; set; } = false;
         #endregion
         
         #region Variables_And_Semaphores
@@ -87,12 +76,6 @@ namespace SuzuukiiKodakkuAssist
         private HashSet<uint> developer_loggedActionIds=new HashSet<uint>();
         
         private volatile int phase1_pulseCannonDrawn=0;
-        private readonly object phase1_gravenImage3TeleportStatusGuideLock=new object();
-        private List<Phase1GravenImage3TeleportStatusRecord> phase1_gravenImage3TeleportStatusRecords=new List<Phase1GravenImage3TeleportStatusRecord>();
-        private volatile bool phase1_gravenImage3TeleportStatusGuideActive=false;
-        private volatile int phase1_gravenImage3TeleportStatusGuideGeneration=0;
-        private Phase1GravenImage3TeleportStatusStep phase1_gravenImage3TeleportStatusStep1;
-        private Phase1GravenImage3TeleportStatusStep phase1_gravenImage3TeleportStatusStep2;
         private volatile bool phase1_isFlagrantFireFake=false;
         private volatile bool phase1_isExpandingFreezeFake=false;
         private volatile bool phase1_isThrummingThunderFake=false;
@@ -105,14 +88,6 @@ namespace SuzuukiiKodakkuAssist
         private string phase1_pendingFlagrantFirePlayerIcon=string.Empty;
         private string phase1_pendingFlagrantFireObfuscationIcon=string.Empty;
         private int phase1_flagrantFireHeadMarkerPairGeneration=0;
-        private volatile int phase1_gravenImage1TowerDrawn=0;
-        private readonly object phase1_gravenImage1TowerLock=new object();
-        private HashSet<int> phase1_gravenImage1LaserTargetIndexes=new HashSet<int>();
-        private List<Vector3> phase1_gravenImage1TowerPositions=new List<Vector3>();
-        private readonly object phase1_gravenImage1ObfuscationGuideLock=new object();
-        private bool? phase1_gravenImage1IceDiagonalLeftUpRightDown=null;
-        private HashSet<ulong> phase1_gravenImage1WaveTetherTargets=new HashSet<ulong>();
-        private volatile int phase1_gravenImage1ObfuscationGuideDrawn=0;
         private volatile bool phase1_gravenImage2IsFirstHalf=true;
         
         #endregion
@@ -131,12 +106,9 @@ namespace SuzuukiiKodakkuAssist
         private const int PHASE1_HYPERDRIVE_DELAY=0;
         private const int PHASE1_HYPERDRIVE_DURATION=7500;
         private const int PHASE1_HYPERDRIVE_SUPPRESS=1000;
-        private const int PHASE1_PULSE_WAVE_ARROW_DURATION=5125;
         private static readonly Vector3 PHASE1_PULSE_CANNON_SOURCE_POSITION=new Vector3(100,0,65);
         private const int PHASE1_PULSE_CANNON_DELAY=5625;
         private const int PHASE1_PULSE_CANNON_DURATION=4375;
-        private const int PHASE1_SINGLE_TOWER_RADIUS=4;
-        private const int PHASE1_SINGLE_TOWER_DRAW_DURATION=3500;
         private const int PHASE1_FLAGRANT_FIRE_DRAW_DURATION=5875;
         private const int PHASE1_EXPANDING_FREEZE_DURATION=5000;
         private const int PHASE1_THRUMMING_THUNDER_DURATION=5000;
@@ -145,15 +117,6 @@ namespace SuzuukiiKodakkuAssist
         private const int PHASE1_ACTION_EFFECT_HIDE_TOTAL_DURATION=PHASE1_ACTION_EFFECT_HIDE_DURATION+PHASE1_ACTION_EFFECT_HIDE_RECOVERY_DELAY;
         private const int PHASE1_EXPLOSION_DRAW_DURATION=3000;
         private const int PHASE1_CHAIN_TRAP_RADIUS=6;
-        private const int PHASE1_CHAIN_TRAP_KNOCKBACK_GUIDE_DURATION=5000;
-        private const int PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DURATION=15000;
-        private const float PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_RADIUS=1.2f;
-        private const string PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DRAW_PREFIX="Beta_P1_众神之像3_传送放点指路";
-        private const int PHASE1_GRAVEN_IMAGE1_OBFUSCATION_FIRST_GUIDE_DURATION=3000;
-        private const int PHASE1_GRAVEN_IMAGE1_OBFUSCATION_DATA_WAIT_INTERVAL=100;
-        private const int PHASE1_GRAVEN_IMAGE1_OBFUSCATION_DATA_WAIT_RETRIES=5;
-        private const int PHASE1_GRAVEN_IMAGE1_OBFUSCATION_SECOND_GUIDE_DELAY=5000;
-        private const int PHASE1_GRAVEN_IMAGE1_OBFUSCATION_SECOND_GUIDE_DURATION=5000;
         private const int PHASE1_GRAVEN_IMAGE2_FIRST_GRAVITY_DELAY=0;
         private const int PHASE1_GRAVEN_IMAGE2_FIRST_GRAVITY_DURATION=6500;
         private const int PHASE1_GRAVEN_IMAGE2_SECOND_GRAVITY_DELAY=3875;
@@ -170,21 +133,6 @@ namespace SuzuukiiKodakkuAssist
         private const int DEVELOPER_MAX_LOGGED_ACTION_IDS=256;
         private const int PARTY_TEST_DURATION=20000;
         
-        private static readonly int[] PHASE1_GRAVEN_IMAGE1_TOWER_PRIORITY=new int[] {3,2,1,0,4,5,6,7};
-        private static readonly Vector3 PHASE1_GRAVEN_IMAGE1_UPPER_LEFT_POINT=new Vector3(93.90f,0,93.94f);
-        private static readonly Vector3 PHASE1_GRAVEN_IMAGE1_UPPER_RIGHT_POINT=new Vector3(106.09f,0,93.93f);
-        private static readonly Vector3[] PHASE1_GRAVEN_IMAGE1_RIGHT_SIDE_GUIDE_POINTS=new Vector3[] {
-            new Vector3(103,0,100),
-            new Vector3(109,0,100),
-            new Vector3(113,0,100),
-            new Vector3(119,0,100)
-        };
-        private static readonly Vector3[] PHASE1_GRAVEN_IMAGE1_LEFT_SIDE_GUIDE_POINTS=new Vector3[] {
-            new Vector3(97,0,100),
-            new Vector3(91,0,100),
-            new Vector3(87,0,100),
-            new Vector3(81,0,100)
-        };
         private static readonly Vector3 PHASE1_GRAVEN_IMAGE2_GRAVITY_SOURCE_POSITION=new Vector3(102.5f,22.5f,27);
         private static readonly Vector3 PHASE1_GRAVEN_IMAGE2_STONE_SOURCE_POSITION=new Vector3(126,7,41.5f);
         private static readonly Vector3 PHASE1_GRAVEN_IMAGE2_LEFT_SLASH_SOURCE_POSITION=new Vector3(92,15,27);
@@ -202,21 +150,6 @@ namespace SuzuukiiKodakkuAssist
             默语频道_仅自己可见,
             小队频道_所有队员可见
 
-        }
-        
-        private struct Phase1GravenImage3TeleportStatusRecord {
-            
-            public uint StatusId;
-            public long AddedAtMilliseconds;
-            public int DurationMilliseconds;
-            
-        }
-        
-        private struct Phase1GravenImage3TeleportStatusStep {
-            
-            public uint StatusId;
-            public Vector3 Position;
-            
         }
         
         #endregion
@@ -242,7 +175,6 @@ namespace SuzuukiiKodakkuAssist
                 
             }
             resetPhase1TransientData();
-            resetPhase1GravenImage3TeleportData();
 
         }
         
@@ -552,44 +484,6 @@ namespace SuzuukiiKodakkuAssist
 
         }
         
-        [ScriptMethod(name:"P1 众神之像1 波动弹 (击退指示)",
-            eventType:EventTypeEnum.Tether,
-            eventCondition:["Id:002D"])]
-
-        public void P1_众神之像1_波动弹_击退指示(Event @event,ScriptAccessory accessory) {
-            
-            if(!isInMajorPhase(1)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryTargetId(out var targetId)) {
-                
-                return;
-                
-            }
-            
-            if(enableBetaPhase1GravenImage1ObfuscationGuide&&isInPhase1SubPhase(2)) {
-                
-                lock(phase1_gravenImage1ObfuscationGuideLock) {
-                    
-                    phase1_gravenImage1WaveTetherTargets.Add(targetId);
-                    
-                }
-                
-            }
-            
-            if(targetId!=accessory.Data.Me) {
-                
-                return;
-                
-            }
-            
-            drawFixedArrowOnMe(accessory,new Vector2(2,13),0,colourOfDirectionIndicators.V4.WithW(1),PHASE1_PULSE_WAVE_ARROW_DURATION,"P1_众神之像1_波动弹_击退指示");
-
-        }
-        
         [ScriptMethod(name:"P1 玄乎乎魔法 (数据收集)",
             eventType:EventTypeEnum.TargetIcon,
             eventCondition:["Id:regex:^(02A1|02A2|02A3|02A4|02A5|02A6)$"],
@@ -619,80 +513,6 @@ namespace SuzuukiiKodakkuAssist
             
             collectPhase1ObfuscationData(@event,accessory);
 
-        }
-        
-        [ScriptMethod(name:"P1 众神之像1 玄乎乎魔法冰方向 (Beta指路数据)",
-            eventType:EventTypeEnum.StartCasting,
-            eventCondition:["ActionId:regex:^(47768|47771)$"],
-            userControl:false)]
-
-        public void P1_众神之像1_玄乎乎魔法冰方向_Beta指路数据(Event @event,ScriptAccessory accessory) {
-            
-            if(!enableBetaPhase1GravenImage1ObfuscationGuide) {
-                
-                return;
-                
-            }
-            
-            if(!isInPhase1SubPhase(2)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryActionId(out var actionId)) {
-                
-                return;
-                
-            }
-            
-            if(!@event.TrySourceRotation(out var sourceRotation)) {
-                
-                debugLog(accessory,"P1 众神之像1 玄乎乎魔法个人指路: SourceRotation解析失败。");
-                return;
-                
-            }
-            
-            bool isRealIce=actionId==47768;
-            bool rawDiagonalLeftUpRightDown=isPhase1GravenImage1IceDiagonalLeftUpRightDown(sourceRotation);
-            bool actualDiagonalLeftUpRightDown=isRealIce?rawDiagonalLeftUpRightDown:!rawDiagonalLeftUpRightDown;
-            
-            lock(phase1_gravenImage1ObfuscationGuideLock) {
-                
-                phase1_gravenImage1IceDiagonalLeftUpRightDown=actualDiagonalLeftUpRightDown;
-                
-            }
-            
-            debugLog(accessory,$"P1 众神之像1 玄乎乎魔法个人指路: iceAction={actionId}, rotation={sourceRotation}, actualDiagonal={(actualDiagonalLeftUpRightDown?"左上右下":"左下右上")}。");
-            
-        }
-        
-        [ScriptMethod(name:"P1 众神之像1 玄乎乎魔法个人指路 (Beta)",
-            eventType:EventTypeEnum.StartCasting,
-            eventCondition:["ActionId:47764"])]
-
-        public void P1_众神之像1_玄乎乎魔法个人指路_Beta(Event @event,ScriptAccessory accessory) {
-            
-            if(!enableBetaPhase1GravenImage1ObfuscationGuide) {
-                
-                return;
-                
-            }
-            
-            if(!isInPhase1SubPhase(2)) {
-
-                return;
-
-            }
-            
-            if(Interlocked.Exchange(ref phase1_gravenImage1ObfuscationGuideDrawn,1)==1) {
-                
-                return;
-                
-            }
-            
-            _=resolvePhase1GravenImage1ObfuscationGuideAfterDelay(accessory);
-            
         }
         
         [ScriptMethod(name:"P1 呼啦啦爆炎 (数据收集)",
@@ -992,48 +812,6 @@ namespace SuzuukiiKodakkuAssist
             
         }
         
-        [ScriptMethod(name:"P1 众神之像1 连环环陷阱击退指示 (Beta)",
-            eventType:EventTypeEnum.StatusAdd,
-            eventCondition:["StatusID:5078"])]
-
-        public void P1_众神之像1_连环环陷阱击退指示_Beta(Event @event,ScriptAccessory accessory) {
-            
-            if(!enableBetaPhase1ChainTrapKnockbackGuide) {
-                
-                return;
-                
-            }
-            
-            if(!isInPhase1SubPhase(2)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryTargetId(out var targetId)) {
-                
-                return;
-                
-            }
-            
-            if(!tryGetEventDurationMilliseconds(@event,accessory,out int durationMilliseconds)) {
-                
-                return;
-                
-            }
-            
-            getLastWindowDrawTiming(durationMilliseconds,chainTrapMaxDrawDurationSeconds,out int drawDelay,out int drawDuration);
-            
-            int guideDuration=Math.Min(drawDuration,PHASE1_CHAIN_TRAP_KNOCKBACK_GUIDE_DURATION);
-            
-            drawKnockbackGuideFromTrap(accessory,
-                targetId,
-                guideDuration,
-                getPhase1ChainTrapKnockbackGuideDrawName(targetId),
-                drawDelay);
-            
-        }
-        
         [ScriptMethod(name:"P1 众神之像1 连环环陷阱 (范围清除)",
             eventType:EventTypeEnum.StatusRemove,
             eventCondition:["StatusID:5078"],
@@ -1048,84 +826,6 @@ namespace SuzuukiiKodakkuAssist
             }
             
             accessory.Method.RemoveDraw(getPhase1ChainTrapDrawName(targetId));
-            
-        }
-        
-        [ScriptMethod(name:"P1 众神之像1 单人塔 (指路)",
-            eventType:EventTypeEnum.ActionEffect,
-            eventCondition:["ActionId:47784","TargetIndex:1"])]
-
-        public void P1_众神之像1_单人塔_指路(Event @event,ScriptAccessory accessory) {
-            
-            if(!isInPhase1SubPhase(2)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryTargetId(out var targetId)) {
-                
-                return;
-                
-            }
-            
-            int targetIndex=accessory.getPlayerIndex(targetId);
-            
-            if(targetIndex<0) {
-                
-                return;
-                
-            }
-            
-            if(!@event.TryTargetPosition(out var towerPosition)) {
-                
-                debugLog(accessory,"P1 众神之像1 单人塔: TargetPosition解析失败。");
-                return;
-                
-            }
-            
-            List<int> laserTargetIndexes;
-            List<Vector3> towerPositions;
-            bool shouldResolve=false;
-            
-            lock(phase1_gravenImage1TowerLock) {
-                
-                if(!phase1_gravenImage1LaserTargetIndexes.Add(targetIndex)) {
-                    
-                    return;
-                    
-                }
-                
-                phase1_gravenImage1TowerPositions.Add(towerPosition);
-                
-                if(phase1_gravenImage1TowerPositions.Count==4) {
-                    
-                    shouldResolve=true;
-                    laserTargetIndexes=phase1_gravenImage1LaserTargetIndexes.ToList();
-                    towerPositions=phase1_gravenImage1TowerPositions.ToList();
-                    
-                } else {
-                    
-                    laserTargetIndexes=new List<int>();
-                    towerPositions=new List<Vector3>();
-                    
-                }
-                
-            }
-            
-            if(!shouldResolve) {
-                
-                return;
-                
-            }
-            
-            if(Interlocked.Exchange(ref phase1_gravenImage1TowerDrawn,1)==1) {
-                
-                return;
-                
-            }
-            
-            resolvePhase1GravenImage1Tower(accessory,laserTargetIndexes,towerPositions);
             
         }
         
@@ -1391,225 +1091,6 @@ namespace SuzuukiiKodakkuAssist
             
         }
         
-        [ScriptMethod(name:"Beta P1 众神之像3 传送放点指路 (状态收集与首段指路)",
-            eventType:EventTypeEnum.StatusAdd,
-            eventCondition:["StatusID:regex:^(487[6789]|5079|508[012])$"],
-            userControl:false)]
-
-        public void Beta_P1_众神之像3_传送放点指路_状态收集与首段指路(Event @event,ScriptAccessory accessory) {
-            
-            if(!enableBetaPhase1GravenImage3TeleportGuide) {
-                
-                return;
-                
-            }
-            
-            if(!isInMajorPhase(1)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryTargetId(out var targetId)) {
-                
-                return;
-                
-            }
-            
-            if(targetId!=accessory.Data.Me) {
-                
-                return;
-                
-            }
-            
-            if(!tryGetEventDurationMilliseconds(@event,accessory,out int durationMilliseconds)) {
-                
-                return;
-                
-            }
-            
-            if(!tryGetPhase1GravenImage3TeleportStatusId(@event["StatusID"],out var statusId)) {
-                
-                return;
-                
-            }
-            
-            bool shouldDraw=false;
-            Vector3 firstCircle=ARENA_CENTER;
-            Vector3 secondCircle=ARENA_CENTER;
-            Vector3 firstGuidePosition=ARENA_CENTER;
-            int drawGeneration=0;
-            string debugMessage=string.Empty;
-            
-            lock(phase1_gravenImage3TeleportStatusGuideLock) {
-                
-                if(phase1_gravenImage3TeleportStatusGuideActive) {
-                    
-                    debugMessage=$"Beta P1 众神之像3 传送放点指路: 已有活跃指路, 忽略新增状态 status={statusId}, duration={durationMilliseconds}, count={phase1_gravenImage3TeleportStatusRecords.Count}。";
-                    
-                } else {
-                    
-                    phase1_gravenImage3TeleportStatusRecords.Add(new Phase1GravenImage3TeleportStatusRecord {
-                        StatusId=statusId,
-                        AddedAtMilliseconds=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        DurationMilliseconds=durationMilliseconds
-                    });
-                    
-                    debugMessage=$"Beta P1 众神之像3 传送放点指路: 收集状态 status={statusId}, duration={durationMilliseconds}, count={phase1_gravenImage3TeleportStatusRecords.Count}。";
-                    
-                    if(phase1_gravenImage3TeleportStatusRecords.Count==2) {
-                        
-                        if(tryBuildPhase1GravenImage3TeleportGuidePlan(
-                            phase1_gravenImage3TeleportStatusRecords[0],
-                            phase1_gravenImage3TeleportStatusRecords[1],
-                            out firstCircle,
-                            out secondCircle,
-                            out phase1_gravenImage3TeleportStatusStep1,
-                            out phase1_gravenImage3TeleportStatusStep2,
-                            out string caseName)) {
-                            
-                            phase1_gravenImage3TeleportStatusGuideGeneration++;
-                            phase1_gravenImage3TeleportStatusGuideActive=true;
-                            drawGeneration=phase1_gravenImage3TeleportStatusGuideGeneration;
-                            firstGuidePosition=phase1_gravenImage3TeleportStatusStep1.Position;
-                            shouldDraw=true;
-                            debugMessage+=$" 匹配{caseName}, first={phase1_gravenImage3TeleportStatusStep1.StatusId}@{phase1_gravenImage3TeleportStatusStep1.Position}, second={phase1_gravenImage3TeleportStatusStep2.StatusId}@{phase1_gravenImage3TeleportStatusStep2.Position}, generation={drawGeneration}。";
-                            
-                        } else {
-                            
-                            phase1_gravenImage3TeleportStatusGuideGeneration++;
-                            phase1_gravenImage3TeleportStatusGuideActive=false;
-                            phase1_gravenImage3TeleportStatusRecords.Clear();
-                            debugMessage+=" 未匹配坐标计划, 已清空。";
-                            
-                        }
-                        
-                    } else if(phase1_gravenImage3TeleportStatusRecords.Count>2) {
-                        
-                        phase1_gravenImage3TeleportStatusGuideGeneration++;
-                        phase1_gravenImage3TeleportStatusGuideActive=false;
-                        phase1_gravenImage3TeleportStatusRecords.Clear();
-                        debugMessage+=" 状态数量溢出, 已清空。";
-                        
-                    }
-                    
-                }
-                
-            }
-            
-            debugLog(accessory,debugMessage);
-            
-            if(shouldDraw) {
-                
-                drawPhase1GravenImage3TeleportGuidePlan(accessory,drawGeneration,firstCircle,secondCircle,firstGuidePosition);
-                
-            }
-            
-        }
-        
-        [ScriptMethod(name:"Beta P1 众神之像3 传送放点指路 (状态消失切换)",
-            eventType:EventTypeEnum.StatusRemove,
-            eventCondition:["StatusID:regex:^(487[6789]|5079|508[012])$"],
-            userControl:false)]
-
-        public void Beta_P1_众神之像3_传送放点指路_状态消失切换(Event @event,ScriptAccessory accessory) {
-            
-            if(!enableBetaPhase1GravenImage3TeleportGuide) {
-                
-                return;
-                
-            }
-            
-            if(!isInMajorPhase(1)) {
-
-                return;
-
-            }
-            
-            if(!@event.TryTargetId(out var targetId)) {
-                
-                return;
-                
-            }
-            
-            if(targetId!=accessory.Data.Me) {
-                
-                return;
-                
-            }
-            
-            if(!tryGetPhase1GravenImage3TeleportStatusId(@event["StatusID"],out var statusId)) {
-                
-                return;
-                
-            }
-            
-            bool shouldClear=false;
-            bool shouldSwitch=false;
-            Vector3 nextGuidePosition=ARENA_CENTER;
-            int drawGeneration=0;
-            string debugMessage=string.Empty;
-            
-            lock(phase1_gravenImage3TeleportStatusGuideLock) {
-                
-                int removeIndex=findPhase1GravenImage3TeleportStatusRecordIndex(statusId);
-                
-                if(removeIndex<0) {
-                    
-                    debugMessage=$"Beta P1 众神之像3 传送放点指路: 状态消失但未找到记录 status={statusId}, active={phase1_gravenImage3TeleportStatusGuideActive}, count={phase1_gravenImage3TeleportStatusRecords.Count}。";
-                    
-                } else {
-                    
-                    phase1_gravenImage3TeleportStatusRecords.RemoveAt(removeIndex);
-                    debugMessage=$"Beta P1 众神之像3 传送放点指路: 状态消失 status={statusId}, remaining={phase1_gravenImage3TeleportStatusRecords.Count}。";
-                    
-                    if(phase1_gravenImage3TeleportStatusGuideActive&&phase1_gravenImage3TeleportStatusRecords.Count<=0) {
-                        
-                        phase1_gravenImage3TeleportStatusGuideGeneration++;
-                        phase1_gravenImage3TeleportStatusGuideActive=false;
-                        phase1_gravenImage3TeleportStatusRecords.Clear();
-                        phase1_gravenImage3TeleportStatusStep1=default;
-                        phase1_gravenImage3TeleportStatusStep2=default;
-                        shouldClear=true;
-                        debugMessage+=$" 清除全部指路 generation={phase1_gravenImage3TeleportStatusGuideGeneration}。";
-                        
-                    } else if(phase1_gravenImage3TeleportStatusGuideActive&&phase1_gravenImage3TeleportStatusRecords.Count==1) {
-                        
-                        var remaining=phase1_gravenImage3TeleportStatusRecords[0];
-                        var nextStep=resolvePhase1GravenImage3TeleportStatusStepAfterRemove(remaining);
-                        nextGuidePosition=nextStep.Position;
-                        drawGeneration=phase1_gravenImage3TeleportStatusGuideGeneration;
-                        shouldSwitch=true;
-                        debugMessage+=$" 切换到第二段 status={nextStep.StatusId}, position={nextGuidePosition}, generation={drawGeneration}。";
-                        
-                    }
-                    
-                }
-                
-            }
-            
-            debugLog(accessory,debugMessage);
-            
-            if(shouldClear) {
-                
-                accessory.Method.RemoveDraw($"{PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DRAW_PREFIX}_.*");
-                return;
-                
-            }
-            
-            if(shouldSwitch) {
-                
-                accessory.Method.RemoveDraw(getPhase1GravenImage3TeleportGuideDrawName(drawGeneration,"Guide_1"));
-                drawGuideToPosition(accessory,
-                    nextGuidePosition,
-                    PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DURATION,
-                    getPhase1GravenImage3TeleportGuideDrawName(drawGeneration,"Guide_2"),
-                    accessory.Data.DefaultSafeColor);
-                
-            }
-            
-        }
-        
         #endregion
         
         #region Major_Phase_2
@@ -1687,7 +1168,6 @@ namespace SuzuukiiKodakkuAssist
             }
             
             resetPhase1TransientData();
-            resetPhase1GravenImage3TeleportData();
             
             debugLog(accessory,$"P2 开场阶段切换: majorPhase={majorPhase}, phase={phase}。");
             
@@ -1707,38 +1187,10 @@ namespace SuzuukiiKodakkuAssist
         private void resetPhase1TransientData() {
             
             phase1_pulseCannonDrawn=0;
-            resetPhase1GravenImage1TowerData();
-            resetPhase1GravenImage1ObfuscationGuideData();
             phase1_gravenImage2IsFirstHalf=true;
             resetPhase1ObfuscationData();
             resetPhase1FlagrantFireIconData();
             resetPhase1FlagrantFireHeadMarkerPairData();
-            
-        }
-        
-        private void resetPhase1GravenImage1TowerData() {
-            
-            phase1_gravenImage1TowerDrawn=0;
-            
-            lock(phase1_gravenImage1TowerLock) {
-                
-                phase1_gravenImage1LaserTargetIndexes.Clear();
-                phase1_gravenImage1TowerPositions.Clear();
-                
-            }
-            
-        }
-        
-        private void resetPhase1GravenImage1ObfuscationGuideData() {
-            
-            phase1_gravenImage1ObfuscationGuideDrawn=0;
-            
-            lock(phase1_gravenImage1ObfuscationGuideLock) {
-                
-                phase1_gravenImage1IceDiagonalLeftUpRightDown=null;
-                phase1_gravenImage1WaveTetherTargets.Clear();
-                
-            }
             
         }
         
@@ -1748,274 +1200,6 @@ namespace SuzuukiiKodakkuAssist
             phase1_isExpandingFreezeFake=false;
             phase1_isThrummingThunderFake=false;
             phase1_flagrantFireTruthConfirmed.Reset();
-            
-        }
-        
-        private void resetPhase1GravenImage3TeleportData() {
-            
-            phase1_gravenImage3TeleportStatusGuideActive=false;
-            phase1_gravenImage3TeleportStatusGuideGeneration++;
-            
-            lock(phase1_gravenImage3TeleportStatusGuideLock) {
-                
-                phase1_gravenImage3TeleportStatusRecords.Clear();
-                phase1_gravenImage3TeleportStatusStep1=default;
-                phase1_gravenImage3TeleportStatusStep2=default;
-                
-            }
-            
-        }
-        
-        private bool tryGetPhase1GravenImage3TeleportStatusId(string? rawStatusId,out uint statusId) {
-            
-            statusId=0;
-            
-            if(!uint.TryParse(rawStatusId,out statusId)) {
-                
-                return false;
-                
-            }
-            
-            return statusId is 4876 or 4877 or 4878 or 4879 or 5079 or 5080 or 5081 or 5082;
-            
-        }
-        
-        private bool tryBuildPhase1GravenImage3TeleportGuidePlan(
-            Phase1GravenImage3TeleportStatusRecord first,
-            Phase1GravenImage3TeleportStatusRecord second,
-            out Vector3 circle1,
-            out Vector3 circle2,
-            out Phase1GravenImage3TeleportStatusStep step1,
-            out Phase1GravenImage3TeleportStatusStep step2,
-            out string caseName) {
-            
-            circle1=ARENA_CENTER;
-            circle2=ARENA_CENTER;
-            step1=default;
-            step2=default;
-            caseName=string.Empty;
-            
-            if(first.StatusId==second.StatusId) {
-                
-                return tryBuildPhase1GravenImage3DuplicateTeleportGuide(first.StatusId,out circle1,out circle2,out step1,out step2,out caseName);
-                
-            }
-            
-            if(tryBuildPhase1GravenImage3MixedTeleportGuide(first,second,4878,new Vector3(108,0,100),5080,new Vector3(114,0,100),"情况5",out circle1,out circle2,out step1,out step2,out caseName)) {
-                
-                return true;
-                
-            }
-            
-            if(tryBuildPhase1GravenImage3MixedTeleportGuide(first,second,4879,new Vector3(92,0,100),5079,new Vector3(86,0,100),"情况6",out circle1,out circle2,out step1,out step2,out caseName)) {
-                
-                return true;
-                
-            }
-            
-            if(tryBuildPhase1GravenImage3MixedTeleportGuide(first,second,4876,new Vector3(100,0,92),5081,new Vector3(100,0,86),"情况7",out circle1,out circle2,out step1,out step2,out caseName)) {
-                
-                return true;
-                
-            }
-            
-            if(tryBuildPhase1GravenImage3MixedTeleportGuide(first,second,4877,new Vector3(100,0,108),5082,new Vector3(100,0,114),"情况8",out circle1,out circle2,out step1,out step2,out caseName)) {
-                
-                return true;
-                
-            }
-            
-            return false;
-            
-        }
-        
-        private bool tryBuildPhase1GravenImage3DuplicateTeleportGuide(
-            uint statusId,
-            out Vector3 circle1,
-            out Vector3 circle2,
-            out Phase1GravenImage3TeleportStatusStep step1,
-            out Phase1GravenImage3TeleportStatusStep step2,
-            out string caseName) {
-            
-            circle1=ARENA_CENTER;
-            circle2=ARENA_CENTER;
-            step1=default;
-            step2=default;
-            caseName=string.Empty;
-            
-            float rotation;
-            int caseIndex;
-            
-            switch(statusId) {
-                
-                case 4876:
-                    rotation=0;
-                    caseIndex=1;
-                    break;
-                
-                case 4877:
-                    rotation=float.Pi;
-                    caseIndex=2;
-                    break;
-                
-                case 4878:
-                    rotation=float.Pi/2;
-                    caseIndex=3;
-                    break;
-                
-                case 4879:
-                    rotation=-float.Pi/2;
-                    caseIndex=4;
-                    break;
-                
-                default:
-                    return false;
-                
-            }
-            
-            Vector3 nearPosition=rotatePositionAroundArenaCenter(new Vector3(94,0,108),rotation);
-            Vector3 farPosition=rotatePositionAroundArenaCenter(new Vector3(94,0,114),rotation);
-            
-            circle1=nearPosition;
-            circle2=farPosition;
-            step1=new Phase1GravenImage3TeleportStatusStep { StatusId=statusId, Position=farPosition };
-            step2=new Phase1GravenImage3TeleportStatusStep { StatusId=statusId, Position=nearPosition };
-            caseName=$"情况{caseIndex} {statusId}+{statusId}";
-            return true;
-            
-        }
-        
-        private bool tryBuildPhase1GravenImage3MixedTeleportGuide(
-            Phase1GravenImage3TeleportStatusRecord first,
-            Phase1GravenImage3TeleportStatusRecord second,
-            uint statusA,
-            Vector3 positionA,
-            uint statusB,
-            Vector3 positionB,
-            string caseLabel,
-            out Vector3 circle1,
-            out Vector3 circle2,
-            out Phase1GravenImage3TeleportStatusStep step1,
-            out Phase1GravenImage3TeleportStatusStep step2,
-            out string caseName) {
-            
-            circle1=positionA;
-            circle2=positionB;
-            step1=default;
-            step2=default;
-            caseName=string.Empty;
-            
-            if(!isStatusPair(first.StatusId,second.StatusId,statusA,statusB)) {
-                
-                return false;
-                
-            }
-            
-            var recordA=first.StatusId==statusA?first:second;
-            var recordB=first.StatusId==statusB?first:second;
-            var stepA=new Phase1GravenImage3TeleportStatusStep { StatusId=statusA, Position=positionA };
-            var stepB=new Phase1GravenImage3TeleportStatusStep { StatusId=statusB, Position=positionB };
-            
-            if(getPhase1GravenImage3TeleportStatusExpiresAt(recordA)<=getPhase1GravenImage3TeleportStatusExpiresAt(recordB)) {
-                
-                step1=stepA;
-                step2=stepB;
-                
-            } else {
-                
-                step1=stepB;
-                step2=stepA;
-                
-            }
-            
-            caseName=$"{caseLabel} {first.StatusId}+{second.StatusId}";
-            return true;
-            
-        }
-        
-        private bool isStatusPair(uint first,uint second,uint statusA,uint statusB) {
-            
-            return (first==statusA&&second==statusB)||(first==statusB&&second==statusA);
-            
-        }
-        
-        private long getPhase1GravenImage3TeleportStatusExpiresAt(Phase1GravenImage3TeleportStatusRecord record) {
-            
-            return record.AddedAtMilliseconds+record.DurationMilliseconds;
-            
-        }
-        
-        private int findPhase1GravenImage3TeleportStatusRecordIndex(uint statusId) {
-            
-            for(int i=0;i<phase1_gravenImage3TeleportStatusRecords.Count;i++) {
-                
-                if(phase1_gravenImage3TeleportStatusRecords[i].StatusId==statusId) {
-                    
-                    return i;
-                    
-                }
-                
-            }
-            
-            return -1;
-            
-        }
-        
-        private Phase1GravenImage3TeleportStatusStep resolvePhase1GravenImage3TeleportStatusStepAfterRemove(Phase1GravenImage3TeleportStatusRecord remaining) {
-            
-            if(phase1_gravenImage3TeleportStatusStep1.StatusId==phase1_gravenImage3TeleportStatusStep2.StatusId) {
-                
-                return phase1_gravenImage3TeleportStatusStep2;
-                
-            }
-            
-            return remaining.StatusId==phase1_gravenImage3TeleportStatusStep2.StatusId?phase1_gravenImage3TeleportStatusStep2:phase1_gravenImage3TeleportStatusStep1;
-            
-        }
-        
-        private void drawPhase1GravenImage3TeleportGuidePlan(ScriptAccessory accessory,int generation,Vector3 circle1,Vector3 circle2,Vector3 firstGuidePosition) {
-            
-            drawCircleAtPosition(accessory,
-                circle1,
-                PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_RADIUS,
-                accessory.Data.DefaultSafeColor,
-                PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DURATION,
-                getPhase1GravenImage3TeleportGuideDrawName(generation,"Circle_1"),
-                drawMode:DrawModeEnum.Imgui);
-            
-            drawCircleAtPosition(accessory,
-                circle2,
-                PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_RADIUS,
-                accessory.Data.DefaultSafeColor,
-                PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DURATION,
-                getPhase1GravenImage3TeleportGuideDrawName(generation,"Circle_2"),
-                drawMode:DrawModeEnum.Imgui);
-            
-            drawGuideToPosition(accessory,
-                firstGuidePosition,
-                PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DURATION,
-                getPhase1GravenImage3TeleportGuideDrawName(generation,"Guide_1"),
-                accessory.Data.DefaultSafeColor);
-            
-        }
-        
-        private string getPhase1GravenImage3TeleportGuideDrawName(int generation,string suffix) {
-            
-            return $"{PHASE1_GRAVEN_IMAGE3_TELEPORT_STATUS_GUIDE_DRAW_PREFIX}_{generation}_{suffix}";
-            
-        }
-        
-        private Vector3 rotatePositionAroundArenaCenter(Vector3 position,float radians) {
-            
-            float x=position.X-ARENA_CENTER.X;
-            float z=position.Z-ARENA_CENTER.Z;
-            float sin=MathF.Sin(radians);
-            float cos=MathF.Cos(radians);
-            
-            return new Vector3(
-                ARENA_CENTER.X+x*cos+z*sin,
-                position.Y,
-                ARENA_CENTER.Z-x*sin+z*cos);
             
         }
         
@@ -2338,31 +1522,6 @@ namespace SuzuukiiKodakkuAssist
             
         }
         
-        private string getPhase1ChainTrapKnockbackGuideDrawName(ulong targetId) {
-            
-            return $"Beta_P1_众神之像1_连环环陷阱_击退指示_{targetId:X}";
-            
-        }
-        
-        private void drawKnockbackGuideFromTrap(ScriptAccessory accessory,ulong trapTargetId,int duration,string name,int delay=0) {
-            
-            var currentProperties=accessory.Data.GetDefaultDrawProperties();
-            
-            currentProperties.Name=name;
-            currentProperties.Scale=new Vector2(2,14);
-            currentProperties.Owner=accessory.Data.Me;
-            currentProperties.TargetObject=trapTargetId;
-            currentProperties.Rotation=float.Pi;
-            currentProperties.FadeCentreObject=trapTargetId;
-            currentProperties.FadeDistance=PHASE1_CHAIN_TRAP_RADIUS;
-            currentProperties.Color=colourOfDirectionIndicators.V4.WithW(1);
-            currentProperties.Delay=delay;
-            currentProperties.DestoryAt=duration;
-            
-            accessory.Method.SendDraw(DrawModeEnum.Imgui,DrawTypeEnum.Displacement,currentProperties);
-            
-        }
-        
         private bool tryGetEventDurationMilliseconds(Event @event,ScriptAccessory accessory,out int durationMilliseconds) {
             
             durationMilliseconds=0;
@@ -2447,240 +1606,6 @@ namespace SuzuukiiKodakkuAssist
             currentProperties.DestoryAt=duration;
             
             accessory.Method.SendDraw(DrawModeEnum.Default,DrawTypeEnum.Rect,currentProperties);
-            
-        }
-        
-        private async Task resolvePhase1GravenImage1ObfuscationGuideAfterDelay(ScriptAccessory accessory) {
-            
-            bool? diagonalLeftUpRightDown=null;
-            HashSet<ulong> tetherTargets=new HashSet<ulong>();
-            
-            for(int i=0;i<PHASE1_GRAVEN_IMAGE1_OBFUSCATION_DATA_WAIT_RETRIES;i++) {
-                
-                await Task.Delay(PHASE1_GRAVEN_IMAGE1_OBFUSCATION_DATA_WAIT_INTERVAL);
-                
-                lock(phase1_gravenImage1ObfuscationGuideLock) {
-                    
-                    diagonalLeftUpRightDown=phase1_gravenImage1IceDiagonalLeftUpRightDown;
-                    tetherTargets=new HashSet<ulong>(phase1_gravenImage1WaveTetherTargets);
-                    
-                }
-                
-                if(diagonalLeftUpRightDown.HasValue&&tetherTargets.Count==4) {
-                    
-                    break;
-                    
-                }
-                
-            }
-            
-            if(!diagonalLeftUpRightDown.HasValue) {
-                
-                debugLog(accessory,"P1 众神之像1 玄乎乎魔法个人指路: 未收集到冰方向, 跳过指路。");
-                return;
-                
-            }
-            
-            if(tetherTargets.Count!=4) {
-                
-                debugLog(accessory,$"P1 众神之像1 玄乎乎魔法个人指路: 波动弹连线数量异常 count={tetherTargets.Count}, 跳过指路。");
-                return;
-                
-            }
-            
-            resolvePhase1GravenImage1ObfuscationGuide(accessory,diagonalLeftUpRightDown.Value,tetherTargets);
-            
-        }
-        
-        private void resolvePhase1GravenImage1ObfuscationGuide(ScriptAccessory accessory,bool diagonalLeftUpRightDown,HashSet<ulong> tetherTargets) {
-            
-            int myIndex=accessory.getMyIndex();
-            
-            if(!isLegalPartyIndex(myIndex)) {
-                
-                debugLog(accessory,"P1 众神之像1 玄乎乎魔法个人指路: 无法解析自己的小队序号。");
-                return;
-                
-            }
-            
-            Vector3 firstGuidePosition=getPhase1GravenImage1FirstObfuscationGuidePosition(accessory.Data.Me,diagonalLeftUpRightDown,tetherTargets);
-            
-            if(!tryGetPhase1GravenImage1SecondObfuscationGuidePosition(accessory,diagonalLeftUpRightDown,tetherTargets,out Vector3 secondGuidePosition,out string sideName,out int order)) {
-                
-                debugLog(accessory,$"P1 众神之像1 玄乎乎魔法个人指路: 第二段分配失败 myIndex={myIndex}, tetherTargets={string.Join(",",tetherTargets)}。");
-                return;
-                
-            }
-            
-            drawGuideToPosition(accessory,
-                firstGuidePosition,
-                PHASE1_GRAVEN_IMAGE1_OBFUSCATION_FIRST_GUIDE_DURATION,
-                $"Beta_P1_众神之像1_玄乎乎魔法_第一段指路_{myIndex}",
-                accessory.Data.DefaultSafeColor);
-            
-            drawGuideToPosition(accessory,
-                secondGuidePosition,
-                PHASE1_GRAVEN_IMAGE1_OBFUSCATION_SECOND_GUIDE_DURATION,
-                $"Beta_P1_众神之像1_玄乎乎魔法_第二段指路_{myIndex}",
-                accessory.Data.DefaultSafeColor,
-                PHASE1_GRAVEN_IMAGE1_OBFUSCATION_SECOND_GUIDE_DELAY);
-            
-            debugLog(accessory,$"P1 众神之像1 玄乎乎魔法个人指路: myIndex={myIndex}, diagonal={(diagonalLeftUpRightDown?"左上右下":"左下右上")}, first={firstGuidePosition}, second={secondGuidePosition}, side={sideName}, order={order}。");
-            
-        }
-        
-        private Vector3 getPhase1GravenImage1FirstObfuscationGuidePosition(ulong playerId,bool diagonalLeftUpRightDown,HashSet<ulong> tetherTargets) {
-            
-            Vector3 coveredUpperPoint=diagonalLeftUpRightDown?PHASE1_GRAVEN_IMAGE1_UPPER_LEFT_POINT:PHASE1_GRAVEN_IMAGE1_UPPER_RIGHT_POINT;
-            Vector3 uncoveredUpperPoint=diagonalLeftUpRightDown?PHASE1_GRAVEN_IMAGE1_UPPER_RIGHT_POINT:PHASE1_GRAVEN_IMAGE1_UPPER_LEFT_POINT;
-            
-            return tetherTargets.Contains(playerId)?coveredUpperPoint:uncoveredUpperPoint;
-            
-        }
-        
-        private bool tryGetPhase1GravenImage1SecondObfuscationGuidePosition(
-            ScriptAccessory accessory,
-            bool diagonalLeftUpRightDown,
-            HashSet<ulong> tetherTargets,
-            out Vector3 guidePosition,
-            out string sideName,
-            out int order) {
-            
-            guidePosition=ARENA_CENTER;
-            sideName=string.Empty;
-            order=-1;
-            
-            var rightSideMembers=accessory.Data.PartyList
-                .Where(playerId => getPhase1GravenImage1FirstObfuscationGuidePosition(playerId,diagonalLeftUpRightDown,tetherTargets).X>ARENA_CENTER.X)
-                .OrderBy(playerId => accessory.Data.PartyList.IndexOf(playerId))
-                .ToList();
-            
-            var leftSideMembers=accessory.Data.PartyList
-                .Where(playerId => getPhase1GravenImage1FirstObfuscationGuidePosition(playerId,diagonalLeftUpRightDown,tetherTargets).X<ARENA_CENTER.X)
-                .OrderBy(playerId => accessory.Data.PartyList.IndexOf(playerId))
-                .ToList();
-            
-            int rightOrder=rightSideMembers.IndexOf(accessory.Data.Me);
-            
-            if(0<=rightOrder&&rightOrder<PHASE1_GRAVEN_IMAGE1_RIGHT_SIDE_GUIDE_POINTS.Length) {
-                
-                guidePosition=PHASE1_GRAVEN_IMAGE1_RIGHT_SIDE_GUIDE_POINTS[rightOrder];
-                sideName="右半场";
-                order=rightOrder;
-                return true;
-                
-            }
-            
-            int leftOrder=leftSideMembers.IndexOf(accessory.Data.Me);
-            
-            if(0<=leftOrder&&leftOrder<PHASE1_GRAVEN_IMAGE1_LEFT_SIDE_GUIDE_POINTS.Length) {
-                
-                guidePosition=PHASE1_GRAVEN_IMAGE1_LEFT_SIDE_GUIDE_POINTS[leftOrder];
-                sideName="左半场";
-                order=leftOrder;
-                return true;
-                
-            }
-            
-            return false;
-            
-        }
-        
-        private bool isPhase1GravenImage1IceDiagonalLeftUpRightDown(float rotation) {
-            
-            double normalizedDegrees=((rotation*180.0/Math.PI)%360.0+360.0)%360.0;
-            double leftUpRightDownDistance=Math.Min(
-                circularDegreeDistance(normalizedDegrees,45),
-                circularDegreeDistance(normalizedDegrees,225));
-            double leftDownRightUpDistance=Math.Min(
-                circularDegreeDistance(normalizedDegrees,135),
-                circularDegreeDistance(normalizedDegrees,315));
-            
-            return leftUpRightDownDistance<=leftDownRightUpDistance;
-            
-        }
-        
-        private static double circularDegreeDistance(double a,double b) {
-            
-            double difference=Math.Abs(a-b)%360.0;
-            
-            return difference<=180.0?difference:360.0-difference;
-            
-        }
-        
-        private void resolvePhase1GravenImage1Tower(ScriptAccessory accessory,List<int> laserTargetIndexes,List<Vector3> towerPositions) {
-            
-            int myIndex=accessory.getMyIndex();
-            
-            if(!isLegalPartyIndex(myIndex)) {
-                
-                debugLog(accessory,"P1 众神之像1 单人塔: 无法解析自己的小队序号。");
-                return;
-                
-            }
-            
-            if(towerPositions.Count<4) {
-                
-                debugLog(accessory,$"P1 众神之像1 单人塔: 塔点数量不足 count={towerPositions.Count}。");
-                return;
-                
-            }
-            
-            var sortedTowerPositions=towerPositions
-                .OrderBy(position => position.X)
-                .ThenBy(position => position.Z)
-                .Take(4)
-                .ToList();
-            
-            if(laserTargetIndexes.Contains(myIndex)) {
-                
-                for(int i=0;i<sortedTowerPositions.Count;i++) {
-                    
-                    drawCircleAtPosition(accessory,
-                        sortedTowerPositions[i],
-                        PHASE1_SINGLE_TOWER_RADIUS,
-                        accessory.Data.DefaultDangerColor,
-                        PHASE1_SINGLE_TOWER_DRAW_DURATION,
-                        $"P1_众神之像1_单人塔_非自己_{i}",
-                        drawMode:DrawModeEnum.Default);
-                    
-                }
-                
-                return;
-                
-            }
-            
-            var towerSoakers=PHASE1_GRAVEN_IMAGE1_TOWER_PRIORITY
-                .Where(partyIndex => !laserTargetIndexes.Contains(partyIndex))
-                .ToList();
-            
-            int assignedTowerIndex=towerSoakers.IndexOf(myIndex);
-            
-            if(assignedTowerIndex<0||assignedTowerIndex>=sortedTowerPositions.Count) {
-                
-                debugLog(accessory,$"P1 众神之像1 单人塔: 分配失败 myIndex={myIndex}, towerSoakers={string.Join(",",towerSoakers)}, laserTargets={string.Join(",",laserTargetIndexes)}。");
-                return;
-                
-            }
-            
-            Vector3 assignedPosition=sortedTowerPositions[assignedTowerIndex];
-            
-            drawCircleAtPosition(accessory,
-                assignedPosition,
-                PHASE1_SINGLE_TOWER_RADIUS,
-                accessory.Data.DefaultSafeColor,
-                PHASE1_SINGLE_TOWER_DRAW_DURATION,
-                $"P1_众神之像1_单人塔_自己_{myIndex}",
-                drawMode:DrawModeEnum.Imgui);
-            
-            var waypoint=accessory.waypointToPosition(
-                assignedPosition,
-                PHASE1_SINGLE_TOWER_DRAW_DURATION,
-                name:$"P1_众神之像1_单人塔_指路_{myIndex}",
-                colour:accessory.Data.DefaultSafeColor);
-            accessory.Method.SendDraw(DrawModeEnum.Imgui,DrawTypeEnum.Displacement,waypoint);
-            
-            debugLog(accessory,$"P1 众神之像1 单人塔: myIndex={myIndex}, towerIndex={assignedTowerIndex}, position={assignedPosition}。");
             
         }
         
